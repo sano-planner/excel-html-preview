@@ -70,6 +70,7 @@
   <div class="row opts">
     <label><input type="checkbox" id="follow" checked> 選択に追従</label>
     <label><input type="checkbox" id="nl2br" checked> 改行を反映</label>
+    <label><input type="checkbox" id="gameTags" checked> ゲームタグ変換</label>
     <label><input type="checkbox" id="showSrc"> ソース表示</label>
     <label>幅
       <select id="width">
@@ -123,7 +124,7 @@ const STORAGE_KEY = "cellHtmlPreview.settings.v1";
 /* ===== 要素 ===== */
 const $ = (id) => document.getElementById(id);
 const els = {
-  addr: $("addr"), refresh: $("refresh"), follow: $("follow"), nl2br: $("nl2br"),
+  addr: $("addr"), refresh: $("refresh"), follow: $("follow"), nl2br: $("nl2br"), gameTags: $("gameTags"),
   showSrc: $("showSrc"), width: $("width"), check: $("check"), stage: $("stage"),
   preview: $("preview"), source: $("source"), css: $("css"),
   standalone: $("standalone"), manual: $("manual")
@@ -137,6 +138,7 @@ function loadSettings() {
     const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     els.css.value = typeof s.css === "string" ? s.css : DEFAULT_CSS;
     if (typeof s.nl2br === "boolean") els.nl2br.checked = s.nl2br;
+    if (typeof s.gameTags === "boolean") els.gameTags.checked = s.gameTags;
     if (typeof s.width === "string") els.width.value = s.width;
   } catch (e) {
     els.css.value = DEFAULT_CSS;
@@ -145,7 +147,7 @@ function loadSettings() {
 function saveSettings() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      css: els.css.value, nl2br: els.nl2br.checked, width: els.width.value
+      css: els.css.value, nl2br: els.nl2br.checked, gameTags: els.gameTags.checked, width: els.width.value
     }));
   } catch (e) { /* 保存できない環境では無視 */ }
 }
@@ -175,6 +177,13 @@ function checkTags(html) {
   }
   stack.forEach(t => issues.push(`&lt;${t}&gt; が閉じられていない`));
   if (/<[^>]*$/.test(html)) issues.push("「&lt;」で始まって「&gt;」で終わっていない箇所がある");
+  // ゲームタグの値チェック
+  for (const cm of html.matchAll(COLOR_OPEN_RE)) {
+    if (!isValidColor(cm[1])) issues.push(`カラーコードが不正: &lt;color=${escapeHtml(cm[1])}&gt;（#RRGGBB などの形式で指定）`);
+  }
+  for (const sm of html.matchAll(SIZE_OPEN_RE)) {
+    if (!isValidSize(sm[1])) issues.push(`サイズ指定が不正: &lt;size=${escapeHtml(sm[1])}&gt;（数値または % で指定）`);
+  }
   return issues;
 }
 
@@ -194,6 +203,30 @@ function showCheck(text) {
     els.check.textContent = "タグの開始・終了は対応しています";
   }
 }
+
+/* ===== ゲームタグ（Unityリッチテキスト形式）→ HTML 変換 =====
+   <color=#BE5742>文字</color>  → <span style="color:#BE5742">文字</span>
+   <color="red">文字</color>    → 色名・引用符付きにも対応
+   <size=24>文字</size>         → font-size:24px（%指定は em 相当）
+   新しいタグを追加したいときは GAME_TAG_RULES に1行足します */
+const COLOR_OPEN_RE = /<color\s*=\s*["']?([^"'>\s]*)["']?\s*>/gi;
+const SIZE_OPEN_RE  = /<size\s*=\s*["']?([^"'>\s]*)["']?\s*>/gi;
+function isValidColor(v) {
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^[a-z]+$/i.test(v);
+}
+function isValidSize(v) { return /^\d+(?:\.\d+)?%?$/.test(v); }
+const GAME_TAG_RULES = [
+  [COLOR_OPEN_RE, (_, v) => isValidColor(v) ? `<span style="color:${v}">` : `<span class="bad-tag">`],
+  [/<\/color\s*>/gi, "</span>"],
+  [SIZE_OPEN_RE, (_, v) => !isValidSize(v) ? `<span class="bad-tag">`
+      : v.endsWith("%") ? `<span style="font-size:${parseFloat(v) / 100}em">` : `<span style="font-size:${v}px">`],
+  [/<\/size\s*>/gi, "</span>"]
+];
+function convertGameTags(html) {
+  return GAME_TAG_RULES.reduce((acc, [re, to]) => acc.replace(re, to), html);
+}
+// 不正なタグ値は波線で目立たせる
+const BAD_TAG_CSS = ".bad-tag{text-decoration:red wavy underline;}";
 
 /* ===== 描画 ===== */
 function escapeHtml(s) {
@@ -217,11 +250,12 @@ function render() {
     return;
   }
   // セル内の改行（Alt+Enter）を <br> として扱う
-  const body = els.nl2br.checked ? text.replace(/\r\n|\r|\n/g, "<br>") : text;
+  let body = els.gameTags.checked ? convertGameTags(text) : text;
+  if (els.nl2br.checked) body = body.replace(/\r\n|\r|\n/g, "<br>");
   // sandbox（スクリプト実行なし）のiframeに描画。セル内の<script>は実行されません
   els.preview.srcdoc =
     `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>${els.css.value}</style></head><body>${body}</body></html>`;
+<style>${BAD_TAG_CSS}${els.css.value}</style></head><body>${body}</body></html>`;
 }
 
 /* ===== Excelから選択セルを読む ===== */
@@ -257,7 +291,7 @@ function onSelectionChanged() {
 /* ===== 画面操作 ===== */
 els.refresh.addEventListener("click", () => inExcel ? readActiveCell() : render());
 els.follow.addEventListener("change", () => { if (els.follow.checked && inExcel) readActiveCell(); });
-[els.nl2br, els.width].forEach(el => el.addEventListener("change", () => { saveSettings(); render(); }));
+[els.nl2br, els.gameTags, els.width].forEach(el => el.addEventListener("change", () => { saveSettings(); render(); }));
 els.showSrc.addEventListener("change", render);
 let cssTimer = null;
 els.css.addEventListener("input", () => {
