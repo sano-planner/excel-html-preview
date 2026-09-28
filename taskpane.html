@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>セルHTMLプレビュー</title>
+<!-- Office JavaScript API（Microsoft公式CDN）。このURLは変更しないでください -->
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root {
+    --ink: #1c2733;
+    --muted: #5d6b7a;
+    --line: #d5dce3;
+    --pane: #eef2f5;
+    --paper: #ffffff;
+    --brand: #1e5e8c;
+    --ok: #1f7a4d;
+    --warn: #a15c07;
+    --err: #b3261e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+    font-size: 13px; color: var(--ink); background: var(--pane);
+    display: flex; flex-direction: column;
+  }
+  header { padding: 10px 12px 8px; background: var(--paper); border-bottom: 1px solid var(--line); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .addr { font-weight: 600; font-size: 15px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .addr small { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 4px; }
+  button, select {
+    font: inherit; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--brand); }
+  button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .opts { margin-top: 8px; color: var(--muted); }
+  #check { padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--line); background: var(--paper); }
+  #check.ok { color: var(--ok); } #check.warn { color: var(--warn); } #check.err { color: var(--err); }
+  #check ul { margin: 4px 0 0; padding-left: 18px; }
+  main { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+  .stage { margin: 0 auto; background: var(--paper); border: 1px solid var(--line); height: 100%; min-height: 200px; }
+  .stage iframe { width: 100%; height: 100%; border: 0; display: block; }
+  pre#source {
+    margin: 0; padding: 10px; height: 100%; overflow: auto; white-space: pre-wrap; word-break: break-all;
+    font-family: Consolas, "BIZ UDGothic", monospace; font-size: 12px; background: var(--paper); border: 1px solid var(--line);
+  }
+  details { background: var(--paper); border-top: 1px solid var(--line); padding: 6px 12px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  textarea {
+    width: 100%; min-height: 90px; margin-top: 6px; font-family: Consolas, monospace; font-size: 12px;
+    border: 1px solid var(--line); border-radius: 4px; padding: 6px; resize: vertical;
+  }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  #standalone { display: none; padding: 10px 12px; background: #fff8e6; border-bottom: 1px solid #f0d9a8; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="row">
+    <div class="addr" id="addr">セルを選択してください</div>
+    <button id="refresh" title="選択中のセルを読み込み直す">再読み込み</button>
+  </div>
+  <div class="row opts">
+    <label><input type="checkbox" id="follow" checked> 選択に追従</label>
+    <label><input type="checkbox" id="nl2br" checked> 改行を反映</label>
+    <label><input type="checkbox" id="showSrc"> ソース表示</label>
+    <label>幅
+      <select id="width">
+        <option value="">ペイン幅</option>
+        <option value="360">360px</option>
+        <option value="480">480px</option>
+        <option value="640">640px</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<!-- Excelの外（普通のブラウザ）で開いたときだけ表示される動作確認用エリア -->
+<div id="standalone">
+  <strong>Excelの外で開いています。</strong>
+  <p class="hint">GitHub Pagesの公開確認用モードです。下にHTMLを貼るとプレビューされます。</p>
+  <textarea id="manual" placeholder="&lt;b&gt;テスト&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;color:red&quot;&gt;赤文字&lt;/span&gt;"></textarea>
+</div>
+
+<div id="check" hidden></div>
+
+<main>
+  <div class="stage" id="stage">
+    <iframe id="preview" sandbox="allow-same-origin" title="HTMLプレビュー"></iframe>
+  </div>
+  <pre id="source" hidden></pre>
+</main>
+
+<details id="cssBox">
+  <summary>プレビュー用CSS（ゲーム内の見た目に寄せる）</summary>
+  <textarea id="css" spellcheck="false"></textarea>
+  <p class="hint">入力内容はこのPCに自動保存されます。フォント・文字サイズ・行間・背景色を実機に合わせると確認精度が上がります。</p>
+</details>
+
+<script>
+"use strict";
+
+/* ===== 設定 ===== */
+const DEFAULT_CSS =
+`body {
+  margin: 12px;
+  font-family: "Yu Gothic UI", "Hiragino Sans", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #222;
+  word-break: break-all;
+}
+img { max-width: 100%; }`;
+const STORAGE_KEY = "cellHtmlPreview.settings.v1";
+
+/* ===== 要素 ===== */
+const $ = (id) => document.getElementById(id);
+const els = {
+  addr: $("addr"), refresh: $("refresh"), follow: $("follow"), nl2br: $("nl2br"),
+  showSrc: $("showSrc"), width: $("width"), check: $("check"), stage: $("stage"),
+  preview: $("preview"), source: $("source"), css: $("css"),
+  standalone: $("standalone"), manual: $("manual")
+};
+let currentText = "";
+let inExcel = false;
+
+/* ===== 設定の保存・復元（失敗しても動作は継続） ===== */
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    els.css.value = typeof s.css === "string" ? s.css : DEFAULT_CSS;
+    if (typeof s.nl2br === "boolean") els.nl2br.checked = s.nl2br;
+    if (typeof s.width === "string") els.width.value = s.width;
+  } catch (e) {
+    els.css.value = DEFAULT_CSS;
+  }
+}
+function saveSettings() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      css: els.css.value, nl2br: els.nl2br.checked, width: els.width.value
+    }));
+  } catch (e) { /* 保存できない環境では無視 */ }
+}
+
+/* ===== タグの閉じ忘れチェック ===== */
+const VOID_TAGS = new Set(["br","hr","img","input","meta","link","area","base","col","embed","source","track","wbr"]);
+function checkTags(html) {
+  const issues = [];
+  const stack = [];
+  const re = /<(\/?)([a-zA-Z][\w:-]*)\b[^>]*?(\/?)>/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const closing = m[1] === "/";
+    const name = m[2].toLowerCase();
+    const selfClose = m[3] === "/";
+    if (VOID_TAGS.has(name) || selfClose) continue;
+    if (!closing) { stack.push(name); continue; }
+    if (stack.length && stack[stack.length - 1] === name) { stack.pop(); continue; }
+    const idx = stack.lastIndexOf(name);
+    if (idx === -1) {
+      issues.push(`対応する開始タグがない &lt;/${name}&gt;`);
+    } else {
+      const skipped = stack.splice(idx);
+      skipped.shift();
+      skipped.reverse().forEach(t => issues.push(`&lt;${t}&gt; が &lt;/${name}&gt; より先に閉じられていない（入れ子の順序違い）`));
+    }
+  }
+  stack.forEach(t => issues.push(`&lt;${t}&gt; が閉じられていない`));
+  if (/<[^>]*$/.test(html)) issues.push("「&lt;」で始まって「&gt;」で終わっていない箇所がある");
+  return issues;
+}
+
+function showCheck(text) {
+  if (!text) { els.check.hidden = true; return; }
+  const hasTag = /<[a-zA-Z\/]/.test(text);
+  const issues = checkTags(text);
+  els.check.hidden = false;
+  if (issues.length) {
+    els.check.className = "err";
+    els.check.innerHTML = `タグの構造に ${issues.length} 件の問題があります<ul>${issues.map(i => `<li>${i}</li>`).join("")}</ul>`;
+  } else if (!hasTag) {
+    els.check.className = "warn";
+    els.check.textContent = "HTMLタグは含まれていません（プレーンテキストとして表示）";
+  } else {
+    els.check.className = "ok";
+    els.check.textContent = "タグの開始・終了は対応しています";
+  }
+}
+
+/* ===== 描画 ===== */
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function render() {
+  const text = currentText;
+  showCheck(text);
+
+  // 幅の切り替え
+  els.stage.style.width = els.width.value ? els.width.value + "px" : "";
+  els.stage.style.maxWidth = els.width.value ? "none" : "100%";
+
+  // ソース表示
+  els.source.hidden = !els.showSrc.checked;
+  els.stage.hidden = els.showSrc.checked;
+  els.source.textContent = text;
+
+  if (!text) {
+    els.preview.srcdoc = `<div style="color:#5d6b7a;font:13px sans-serif;padding:24px;text-align:center">空のセルです</div>`;
+    return;
+  }
+  // セル内の改行（Alt+Enter）を <br> として扱う
+  const body = els.nl2br.checked ? text.replace(/\r\n|\r|\n/g, "<br>") : text;
+  // sandbox（スクリプト実行なし）のiframeに描画。セル内の<script>は実行されません
+  els.preview.srcdoc =
+    `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>${els.css.value}</style></head><body>${body}</body></html>`;
+}
+
+/* ===== Excelから選択セルを読む ===== */
+async function readActiveCell() {
+  try {
+    await Excel.run(async (ctx) => {
+      const cell = ctx.workbook.getActiveCell();
+      cell.load(["address", "values"]);
+      await ctx.sync();
+      const v = cell.values[0][0];
+      currentText = (v === null || v === undefined) ? "" : String(v);
+      const addr = cell.address;               // 例: Sheet1!B3
+      const bang = addr.lastIndexOf("!");
+      const sheet = addr.slice(0, bang).replace(/^'|'$/g, "");
+      els.addr.innerHTML = `${escapeHtml(addr.slice(bang + 1))}<small>${escapeHtml(sheet)}</small>`;
+      render();
+    });
+  } catch (e) {
+    els.addr.textContent = "読み込みに失敗しました";
+    els.check.hidden = false;
+    els.check.className = "err";
+    els.check.textContent = "セルを読み込めませんでした。セルの編集中（入力中）でないか確認し、「再読み込み」を押してください。詳細: " + (e && e.message ? e.message : e);
+  }
+}
+
+let timer = null;
+function onSelectionChanged() {
+  if (!els.follow.checked) return;
+  clearTimeout(timer);
+  timer = setTimeout(readActiveCell, 150); // 連続移動時に読み込みすぎないよう少し待つ
+}
+
+/* ===== 画面操作 ===== */
+els.refresh.addEventListener("click", () => inExcel ? readActiveCell() : render());
+els.follow.addEventListener("change", () => { if (els.follow.checked && inExcel) readActiveCell(); });
+[els.nl2br, els.width].forEach(el => el.addEventListener("change", () => { saveSettings(); render(); }));
+els.showSrc.addEventListener("change", render);
+let cssTimer = null;
+els.css.addEventListener("input", () => {
+  clearTimeout(cssTimer);
+  cssTimer = setTimeout(() => { saveSettings(); render(); }, 300);
+});
+els.manual.addEventListener("input", () => { currentText = els.manual.value; render(); });
+
+/* ===== 起動 ===== */
+loadSettings();
+render();
+
+function startStandalone() {
+  els.standalone.style.display = "block";
+  els.follow.disabled = true;
+  els.addr.textContent = "テストモード";
+}
+
+if (window.Office && Office.onReady) {
+  Office.onReady((info) => {
+    if (info.host === Office.HostType.Excel) {
+      inExcel = true;
+      Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged, onSelectionChanged);
+      readActiveCell();
+    } else {
+      startStandalone();
+    }
+  });
+} else {
+  startStandalone(); // office.js が読み込めなかった場合
+}
+</script>
+</body>
+</html>
